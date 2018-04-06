@@ -1,0 +1,17 @@
+#! /bin/bash
+
+make_dir(){
+    for d in $*;do
+        [ -d "$d" ] || mkdir -p "$d"
+    done
+}
+
+# prepend a path to the PATH variable
+push_path(){
+	export PATH="$1:$PATH"
+}
+
+# remove a path from the PATH variable
+pop_path(){
+	export PATH=$(echo "$PATH" | cut -d':' -f2-)
+}
