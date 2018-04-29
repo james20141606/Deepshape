@@ -12,6 +12,7 @@ parser.add_argument('-en-depth', dest='en_depth')
 parser.add_argument('-de-depth', dest='de_depth')
 parser.add_argument('-dep', dest='dep')
 parser.add_argument('-hid-dim', dest='hid_dim')
+parser.add_argument('-lr', dest='learning_rate')
 args = parser.parse_args()
 #model_ind = 3, en_depth = 4, de_depth = 5, dep = 4, hid_dim = 10
 
@@ -45,7 +46,7 @@ def data_generator(data, labels, batch_size):
             Y = labels[i*batch_size: (i+1)*batch_size]
             yield (X, Y)
 
-model = seq2seq_model(args.model_ind,int(args.en_depth),int(args.de_depth),int(args.dep),int(args.hid_dim))
+model = seq2seq_model(args.model_ind,int(args.en_depth),int(args.de_depth),int(args.dep),int(args.hid_dim),float(args.learning_rate))
 
 def Model(X_train, Y_train, batch_size=32, num_epochs=int(args.epoch)):
     #model_checkpoint = ModelCheckpoint(args.model_path,
@@ -62,4 +63,4 @@ def Model(X_train, Y_train, batch_size=32, num_epochs=int(args.epoch)):
 x_train, y_train = get_data()
 Model(x_train, y_train, 32, int(args.epoch))
 
-model.save(args.save_path)
+model.save_weights(args.save_path)

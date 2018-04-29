@@ -20,6 +20,45 @@ INPUT_CHANNELS = 16
 OUTPUT_MASK_CHANNELS = 1
 
 
+def weighthed_binary_ce_loss_nan(alpha):
+    #not_nan = tf.logical_not(tf.is_nan(y_true))
+    def celoss(y_true, y_pred):
+        zero = K.equal(y_true, K.zeros((1,)))
+        one = K.equal(y_true, K.ones((1,)))
+        weights = np.array([1, alpha])
+        y_true_0 = tf.boolean_mask(y_true, zero)
+        y_pred_0 = tf.boolean_mask(y_pred, zero)
+        y_true_1 = tf.boolean_mask(y_true, one)
+        y_pred_1 = tf.boolean_mask(y_pred, one)
+        loss_0 = - y_true_0 * K.log(y_pred_0) * K.variable(weights[0])
+        loss_1 = - y_true_1 * K.log(y_pred_1) * K.variable(weights[1])
+        loss = K.mean(loss_0, -1) + K.mean(loss_1, -1)
+        return loss
+    return celoss
+keras.losses.weighthed_binary_ce_loss_nan = weighthed_binary_ce_loss_nan
+
+
+def weighthed_mae_loss_nan(alpha):
+    #not_nan = tf.logical_not(tf.is_nan(y_true))
+    def maeloss(y_true, y_pred):
+        zero = K.equal(y_true, K.zeros((1,)))
+        one = K.equal(y_true, K.ones((1,)))
+        weights = np.array([1, alpha])
+        y_true_0 = tf.boolean_mask(y_true, zero)
+        y_pred_0 = tf.boolean_mask(y_pred, zero)
+        y_true_1 = tf.boolean_mask(y_true, one)
+        y_pred_1 = tf.boolean_mask(y_pred, one)
+        loss_0 = K.mean(K.abs(y_pred_0 - y_true_0), axis=-1) * \
+            K.variable(weights[0])
+        loss_1 = K.mean(K.abs(y_pred_1 - y_true_1), axis=-1) * \
+            K.variable(weights[1])
+        return loss_0+loss_1
+    return maeloss
+
+
+keras.losses.weighthed_mae_loss_nan = weighthed_mae_loss_nan
+
+
 def mean_squared_error(y_true, y_pred):
     return K.mean(K.square(y_pred - y_true), axis=-1)
 
@@ -109,13 +148,10 @@ def double_conv_layer(x, size, dropout, batch_norm):
 
 dropout_val = 0.1
 
+
 def UNET_128(dropout_val=dropout_val, batch_norm=True):
-    if K.image_dim_ordering() == 'th':
-        inputs = Input((INPUT_CHANNELS, None, None))
-        axis = 1
-    else:
-        inputs = Input((None, None, INPUT_CHANNELS))
-        axis = 3
+    inputs = Input((None, None, INPUT_CHANNELS))
+    axis = 3
     filters = 32
 
     conv_128 = double_conv_layer(inputs, filters, dropout_val, batch_norm)
@@ -138,27 +174,30 @@ def UNET_128(dropout_val=dropout_val, batch_norm=True):
     up_8 = concatenate([UpSampling2D(size=(2, 2))(conv_4), conv_8], axis=axis)
     up_conv_8 = double_conv_layer(up_8, 16*filters, dropout_val, batch_norm)
 
-    up_16 = concatenate([UpSampling2D(size=(2, 2))(up_conv_8), conv_16], axis=axis)
+    up_16 = concatenate(
+        [UpSampling2D(size=(2, 2))(up_conv_8), conv_16], axis=axis)
     up_conv_16 = double_conv_layer(up_16, 8*filters, dropout_val, batch_norm)
 
-    up_32 = concatenate([UpSampling2D(size=(2, 2))(up_conv_16), conv_32], axis=axis)
+    up_32 = concatenate(
+        [UpSampling2D(size=(2, 2))(up_conv_16), conv_32], axis=axis)
     up_conv_32 = double_conv_layer(up_32, 4*filters, dropout_val, batch_norm)
 
-    up_64 = concatenate([UpSampling2D(size=(2, 2))(up_conv_32), conv_64], axis=axis)
+    up_64 = concatenate(
+        [UpSampling2D(size=(2, 2))(up_conv_32), conv_64], axis=axis)
     up_conv_64 = double_conv_layer(up_64, 2*filters, dropout_val, batch_norm)
 
-    up_128 = concatenate([UpSampling2D(size=(2, 2))(up_conv_64), conv_128], axis=axis)
+    up_128 = concatenate(
+        [UpSampling2D(size=(2, 2))(up_conv_64), conv_128], axis=axis)
     up_conv_128 = double_conv_layer(up_128, filters, 0, batch_norm)
 
     conv_final = Conv2D(OUTPUT_MASK_CHANNELS, (1, 1))(up_conv_128)
     conv_final = BatchNormalization(axis=axis)(conv_final)
-    conv_final = Activation('sigmoid',name = 'last_activation')(conv_final)
+    conv_final = Activation('sigmoid', name='last_activation')(conv_final)
 
     #to use class weight the dimension must be no more than 3d
-    #conv_final = Reshape(tuple([x for x in conv_final.shape.as_list()])[:-1], input_shape=tuple([x for x in conv_final.shape.as_list()]))(conv_final)
-    
-    #to use class weight the dimension must be no more than 3d
     flatten = Lambda(lambda x: K.batch_flatten(x))(conv_final)
+    #soft = Lambda(lambda x: Dense(x,2, activation='softmax'))(flatten)
     #flatten =Flatten(input_shape = (None,None,1))(conv_final)
     model = Model(inputs, flatten, name="ZF_UNET_128")
+    
     return model

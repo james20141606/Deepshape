@@ -292,42 +292,61 @@ python bin/run_2d_structure_unet.py \
 run rnnseq2seq and attention
 {
 python bin/run_rnnseq2seq.py \
-  -s output/rnnseq2seq_model4.hdf5 \
+  -s output/rnnseq2seq_model4_weights.hdf5 \
   -e 10 \
-  -g 3 \
-  -i data/new/alldata/seqdata/all1.hdf5 \
+  -g 5 \
+  -i data/new/alldata/seqdata/Spitale_2015_invivo_all_0.5  \
   -model-ind 4 \
   -en-depth 4 \
   -de-depth 5 \
   -dep 4 \
-  -hid-dim 10 
+  -hid-dim 10 \
+  -lr 0.05
 }
 
 {
 python bin/run_rnnseq2seq.py \
   -s output/rnnseq2seq_model2.hdf5 \
   -e 10 \
-  -g 4 \
+  -g 3 \
   -i data/new/alldata/seqdata/all2.hdf5 \
   -model-ind 2 \
   -en-depth 4 \
   -de-depth 5 \
   -dep 4 \
-  -hid-dim 10 
+  -hid-dim 10 \
+  -lr 0.05
 }
 
 {
 python bin/run_rnnseq2seq.py \
   -s output/rnnseq2seq_model3.hdf5 \
   -e 10 \
-  -g 5 \
+  -g 4 \
   -i data/new/alldata/seqdata/all3.hdf5 \
   -model-ind 3 \
   -en-depth 4 \
   -de-depth 5 \
   -dep 4 \
-  -hid-dim 10 
+  -hid-dim 10 \
+  -lr 0.05
 }
+
+#4.7
+2d structure
+use weighted cross entropy
+{
+python2 bin/run_2d_structure_unet.py \
+  -s output/2dunetweightedloss_weights.hdf5 \
+  -e 100 \
+  -g 5 \
+  -c 400 \
+  -i known/2d/training.hdf5 \
+  -alpha 731
+}
+sigmoid函数就可以，用交叉熵
+
+
 
 unet_allstride16_4.3_norestrict.hdf5
 unet_allstride16_4.3_restrict.hdf5
