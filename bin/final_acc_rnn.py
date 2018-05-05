@@ -43,18 +43,6 @@ with h5py.File('known/known.h5') as f:
     name = f['name'][:]
 
 
-def Model(model_path):
-    #prepare for model to predict
-    model = UNET_128()
-    optim = Adam()
-    model.compile(optimizer=optim, loss=CrossEntropyLoss(model,10), metrics=[binary_accuracy_with_nan,binary_crossentropy_with_nan,MSE(model)])
-    loss=CrossEntropyLoss(model,10)
-    model = load_model(model_path,custom_objects = {"CrossEntropyLoss": loss,\
-                       'binary_accuracy_with_nan':binary_accuracy_with_nan,\
-                       'binary_crossentropy_with_nan':binary_crossentropy_with_nan,\
-                       'MSE':MSE(model)})
-    return model
-model = Model(model_path)
 
 def calculate_acc(array,true_score):
     '''

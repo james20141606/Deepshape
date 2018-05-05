@@ -107,6 +107,7 @@ rm -f mm10.transcript.vM12.*.bt2
 bowtie2-build mm10.transcript.vM12.fa mm10.transcript.vM12
 ```
 
+
 ## Run icSHAPE pipeline
 The icSHAPE pipeline can be downloaded from: (https://github.com/qczhang/icSHAPE).
 
@@ -431,6 +432,7 @@ bin/preprocess.py CalcDmsseqScores \
     --control-file tmp/DMSSeq_TAIR10/Control \
     -o tmp/DMSSeq_TAIR10/scores
 ```
+
 ```python
 filename = 'tmp/DMSSeq_TAIR10/scores'
 output_file = 'tmp/DMSSeq_TAIR10/scores_by_transcript_id'

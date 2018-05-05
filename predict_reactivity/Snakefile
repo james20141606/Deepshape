@@ -1,0 +1,265 @@
+config: "config.json"
+
+def get_all_inputs(*steps):
+    inputs_available = dict(
+        binarization=expand("{output_dir}/{dataset}/dataset_by_seq/{binarization_method}", 
+            output_dir=config["output_dir"], 
+            dataset=config["datasets"]["SHAPE-MaP"], 
+            binarization_method=config["binarization_methods"]),
+        patteRNA=expand("{output_dir}/{dataset}/dataset_by_seq/patteRNA_viterbi",
+            output_dir=config["output_dir"], 
+            dataset=config["datasets"]["SHAPE-MaP"]),
+        evaluate_model=expand("{output_dir}/{dataset}/metrics/w={window_size},b={binarization_method},m={model},i={cv_index}",
+            output_dir=config["output_dir"],
+            dataset=config["datasets"]["SHAPE-MaP"],
+            window_size=128,
+            binarization_method=config["binarization_methods"],
+            model=config["model_names"],
+            cv_index=list(range(config["cv_n_folds"]))),
+        predict_model_rnas=expand("{output_dir}/{model_rna_dataset}/predict/d={dataset},b={binarization_method},w={window_size},m={model},i=all",
+            output_dir=config["output_dir"],
+            model_rna_dataset=config["datasets"]["model_RNAs"],
+            dataset=config["datasets"]["SHAPE-MaP"],
+            window_size=128,
+            binarization_method=config["binarization_methods"],
+            model=config["model_names"]),
+        evaluate_structures=expand("{output_dir}/{model_rna_dataset}/metrics_by_rna/d={dataset},b={binarization_method},w={window_size},m={model},i=all",
+            output_dir=config["output_dir"],
+            model_rna_dataset=config["datasets"]["model_RNAs"],
+            dataset=config["datasets"]["SHAPE-MaP"],
+            window_size=128,
+            binarization_method=config["binarization_methods"],
+            model=config["model_names"]),
+        summarize_metrics_by_rna=expand("{output_dir}/{dataset}/metrics_by_rna.summary.txt",
+            output_dir=config["output_dir"],
+            dataset=config["datasets"]["model_RNAs"]),
+        summarize_metrics=expand("{output_dir}/{dataset}/metrics.summary.txt",
+            output_dir=config["output_dir"],
+            dataset=config["datasets"]["SHAPE-MaP"]))
+    inputs = []
+    for step in steps:
+        inputs += inputs_available[step]
+    return inputs
+
+rule all:
+    input:
+        get_all_inputs('summarize_metrics')
+
+def get_shapemap_inputs(wildcards):
+    return "output/SHAPE-MaP/Cell_2018/{dataset}".format(
+            output_dir=wildcards.output_dir,
+            dataset=wildcards.dataset.strip("Cell_2018_"))
+
+rule shapemap_to_hdf5:
+    input:
+        get_shapemap_inputs
+    output:
+        "{output_dir}/{dataset}/dataset_by_seq/reactivities"
+    shell:
+        r"""bin/shapemap.py shape_to_hdf5 -i {input} -x .shape -o {output}"""
+
+rule shapemap_to_sequence:
+    input:
+        get_shapemap_inputs
+    output:
+        "{output_dir}/{dataset}/sequences.fa"
+    shell:
+        r"""bin/shapemap.py shape_to_patterna -i {input} -x .shape --sequence -o {output}"""
+
+rule shapemap_to_patterna:
+    input:
+        get_shapemap_inputs
+    output:
+        "{output_dir}/{dataset}/patteRNA.shape"
+    shell:
+        r"""bin/shapemap.py shape_to_patterna -i {input} -x .shape -o {output}"""
+
+rule binarize_by_percentile:
+    input: 
+        "{output_dir}/{dataset}/dataset_by_seq/reactivities"
+    output:
+        "{output_dir}/{dataset}/dataset_by_seq/percentile_{percentile}"
+    wildcard_constraints:
+        percentile="[0-9]+"
+    shell:
+        r"""bin/predict_reactivity.py binarize -i {input}:reactivities \
+         --method "percentile:{wildcards.percentile},$((100 - {wildcards.percentile}))" -o {output}"""
+
+rule train_patteRNA:
+    input:
+        "{output_dir}/{dataset}/patteRNA.shape"
+    output:
+        dir="{output_dir}/{dataset}/patteRNA",
+        model="{output_dir}/{dataset}/patteRNA/trained_model.pickle"
+    shell:
+        r"""patteRNA {input} {output.dir} -vl"""
+
+rule infer_patteRNA:
+    input:
+        shape="{output_dir}/{dataset}/patteRNA.shape",
+        model="{output_dir}/{dataset}/patteRNA/trained_model.pickle"
+    output:
+        posteriors="{output_dir}/{dataset}/patteRNA/posteriors.txt",
+        viterbi="{output_dir}/{dataset}/patteRNA/viterbi.txt"
+    shell:
+        r"""patteRNA {input.shape} $(dirname {output.viterbi}) --model {input.model} -vl --viterbi --posteriors"""
+
+rule patterRNA_posteriors_to_hdf5:
+    input:
+        dir="{output_dir}/{dataset}/patteRNA",
+        posteriors="{output_dir}/{dataset}/patteRNA/posteriors.txt"
+    output:
+        "{output_dir}/{dataset}/dataset_by_seq/patteRNA_posteriors",
+    shell:
+        r"""bin/shapemap.py patterna_to_hdf5 --posteriors-paired -i {input.dir} -o {output}"""
+
+rule patteRNA_viterbi_to_hdf5:
+    input:
+        dir="{output_dir}/{dataset}/patteRNA",
+        viterbi="{output_dir}/{dataset}/patteRNA/viterbi.txt"
+    output:
+        "{output_dir}/{dataset}/dataset_by_seq/patteRNA_viterbi"
+    shell:
+        r"""bin/shapemap.py patterna_to_hdf5 --viterbi -i {input.dir} -o {output}"""
+
+rule cv_split:
+    input:
+        "{output_dir}/{dataset}/dataset_by_seq/reactivities"
+    output:
+        "{output_dir}/{dataset}/cv_split"
+    params:
+        k=5
+    shell:
+        r"""bin/predict_reactivity.py cv_split -i {input}:reactivities -k {params.k} -o {output}"""
+
+rule create_classification_dataset_cv:
+    input:
+        reactivities="{output_dir}/{dataset}/dataset_by_seq/{binarization_method}",
+        sequence="{output_dir}/{dataset}/sequences.fa",
+        cv_split="{output_dir}/{dataset}/cv_split"
+    output:
+        "{output_dir}/{dataset}/dataset_by_window/w={window_size},b={binarization_method},i={cv_index}"
+    wildcard_constraints:
+        cv_index="[0-9]+"
+    shell:
+        r"""bin/predict_reactivity.py create_dataset -i {input.reactivities} \
+                --sequence-file {input.sequence} \
+                --cv-split-file {input.cv_split}:{wildcards.cv_index} \
+                --window-size {wildcards.window_size} --balanced \
+                -o {output} """
+
+rule create_classification_dataset_all:
+    input:
+        reactivities="{output_dir}/{dataset}/dataset_by_seq/{binarization_method}",
+        sequence="{output_dir}/{dataset}/sequences.fa"
+    output:
+        "{output_dir}/{dataset}/dataset_by_window/w={window_size},b={binarization_method},i=all"
+    shell:
+        r"""bin/predict_reactivity.py create_dataset -i {input.reactivities} \
+                --sequence-file {input.sequence} \
+                --window-size {wildcards.window_size} --balanced \
+                -o {output} """
+
+rule create_regression_dataset_cv:
+    input:
+        reactivities="{output_dir}/{dataset}/dataset_by_seq/reactivities",
+        sequnece="{output_dir}/{dataset}/sequencesfa",
+        cv_split="{output_dir}/{dataset}/cv_split"
+    output:
+        "{output_dir}/{dataset}/dataset_by_window/w={window_size},b=reactivities,i={cv_index}"
+    wildcard_constraints:
+        cv_index="[0-9]+"
+    shell:
+        r"""bin/predict_reactivity.py create_dataset -i {input.reactivities}:reactivities \
+            --cv-split-file {input.cv_split}:{wildcards.cv_index} \
+            --sequence-file {input.sequence} \
+            --window-size {wildcards.window_size} \
+            -o {output}"""
+
+rule create_regression_dataset_all:
+    input:
+        reactivities="{output_dir}/{dataset}/dataset_by_seq/reactivities",
+        sequnece="{output_dir}/{dataset}/sequencesfa"
+    output:
+        "{output_dir}/{dataset}/dataset_by_window/w={window_size},b=reactivities,i=all"
+    shell:
+        r"""bin/predict_reactivity.py create_dataset -i {input.reactivities}:reactivities \
+        --sequence-file {input.sequence} \
+        --window-size {wildcards.window_size} \
+        -o {output}"""
+
+rule train_model_cv:
+    input:
+        "{output_dir}/{dataset}/dataset_by_window/w={window_size},b={binarization_method},i={cv_index}"
+    output:
+        model="{output_dir}/{dataset}/trained_models/w={window_size},b={binarization_method},m={model_name},i={cv_index}",
+        keras_log="{output_dir}/{dataset}/keras_log/w={window_size},b={binarization_method},m={model_name},i={cv_index}"
+    wildcard_constraints:
+        cv_index="[0-9]+"
+    shell:
+        r"""bin/predict_reactivity.py train -i {input} -m {wildcards.model_name} \
+            --model-file {output.model} --keras-log {output.keras_log}"""
+
+rule train_model_all:
+    input:
+        "{output_dir}/{dataset}/dataset_by_window/w={window_size},b={binarization_method},i=all"
+    output:
+        model="{output_dir}/{dataset}/trained_models/w={window_size},b={binarization_method},m={model_name},i=all",
+        keras_log="{output_dir}/{dataset}/keras_log/w={window_size},b={binarization_method},m={model_name},i=all"
+    shell:
+        r"""bin/predict_reactivity.py train --xname X --yname y -i {input} -m {wildcards.model_name} \
+            --model-file {output.model} --keras-log {output.keras_log}"""
+
+rule evaluate_model:
+    input:
+        data="{output_dir}/{dataset}/dataset_by_window/w={window_size},b={binarization_method},i={cv_index}",
+        model="{output_dir}/{dataset}/trained_models/w={window_size},b={binarization_method},m={model},i={cv_index}"
+    output:
+        "{output_dir}/{dataset}/metrics/w={window_size},b={binarization_method},m={model},i={cv_index}"
+    wildcard_constraints:
+        cv_index="[0-9]+",
+        window_size="[0-9]+"
+    shell:
+        r"""bin/predict_reactivity.py evaluate -i {input.data} --model-file {input.model} -o {output}
+        """
+
+rule predict_model_rnas:
+    input:
+        sequence="{output_dir}/{model_rna_dataset}/sequences.fa",
+        model="{output_dir}/{dataset}/trained_models/w={window_size},b={binarization_method},m={model},i=all"
+    output:
+        "{output_dir}/{model_rna_dataset}/predict/d={dataset},b={binarization_method},w={window_size},m={model},i=all"
+    wildcard_constraints:
+        window_size="[0-9]+"
+    shell:
+        r"""bin/predict_reactivity.py predict -i {input.sequence} --model-file {input.model} -o {output}
+        """
+
+rule evaluate_model_rnas:
+    input:
+        pred="{output_dir}/{model_rna_dataset}/predict/d={dataset},b={binarization_method},w={window_size},m={model},i=all",
+        dot="{output_dir}/{model_rna_dataset}/structures.dot"
+    output:
+        "{output_dir}/{model_rna_dataset}/metrics_by_rna/d={dataset},b={binarization_method},w={window_size},m={model},i=all"
+    wildcard_constraints:
+        window_size="[0-9]+"
+    shell:
+        r"""if [ "{wildcards.binarization_method}" != "patteRNA_viterbi" ];then swap_labels="--swap-labels"
+            else swap_labels=""; fi
+            bin/predict_reactivity.py evaluate_structures $swap_labels --pred-file {input.pred} --dot-file {input.dot} -o {output}"""
+
+rule summarize_metrics_by_rna:
+    input:
+        "{output_dir}/{dataset}/metrics_by_rna"
+    output:
+        "{output_dir}/{dataset}/metrics_by_rna.summary.txt"
+    shell:
+        r"""bin/predict_reactivity.py summarize_metrics_by_rna -i {input} -o {output}"""
+
+rule summarize_metrics:
+    input:
+        "{output_dir}/{dataset}/metrics"
+    output:
+        "{output_dir}/{dataset}/metrics.summary.txt"
+    shell:
+        r"""bin/predict_reactivity.py summarize_metrics -i {input} -o {output}"""

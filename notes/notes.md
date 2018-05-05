@@ -346,7 +346,19 @@ python2 bin/run_2d_structure_unet.py \
 }
 sigmoid函数就可以，用交叉熵
 
+{
+python3 bin/final_acc_2d_structure.py \
+  -s 5.1_final_acc_2d \
+  -g 4 \
+  -o 0 
+}
 
+{
+python3 bin/final_acc_2d_structure.py \
+  -s 5.1_final_acc_2d \
+  -g 5 \
+  -o 1 
+}
 
 unet_allstride16_4.3_norestrict.hdf5
 unet_allstride16_4.3_restrict.hdf5

@@ -15,6 +15,8 @@ def prepare_output_file(path):
     if path.startswith('/dev'):
         return
     dirpath = os.path.dirname(path)
+    if dirpath == '':
+        dirpath = '.'
     if not os.path.exists(dirpath):
         os.makedirs(dirpath)
 

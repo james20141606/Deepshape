@@ -1,0 +1,19 @@
+{
+    "datasets": {
+        "SHAPE-MaP": [
+            "Cell_2018_cellfree_SHAPE",
+            "Cell_2018_incell_SHAPE",
+            "Cell_2018_kasugamycin_SHAPE"],
+        "model_RNAs": ["model_RNAs_domains"]
+    },
+    "binarization_methods": [
+        "percentile_5",
+        "percentile_10", 
+        "percentile_20", 
+        "percentile_30",
+        "patteRNA_viterbi"],
+    "binarization_percentiles": [5, 10, 20, 30],
+    "output_dir": "output/predict_reactivity",
+    "model_names": ["basic", "mlp1", "conv1", "resnet1"],
+    "cv_n_folds": 5
+}

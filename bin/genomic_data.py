@@ -101,9 +101,9 @@ class GenomicData(object):
         obj.start = None
         obj.end = None
         obj.features = {}
-        for feature_name, values in features.iteritems():
+        for feature_name, values in features.items():
             if obj.start is None:
-                length = np.asarray(map(len, values), dtype='int64')
+                length = np.asarray([len(a) for a in values], dtype='int64')
                 obj.end = np.cumsum(length)
                 obj.start = obj.end - length
             if len(values) != len(names):

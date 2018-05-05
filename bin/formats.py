@@ -280,6 +280,22 @@ def score_structure(true_pairs, pred_pairs, exact=False):
 
     return scores
 
+def read_dot(filename):
+    """Read sequences and structures from a dot file
+    Returns a list of tuples (name, sequence, structure)
+    """
+    records = []
+    with open(filename, 'r') as f:
+        for lineno, line in enumerate(f):
+            if lineno%3 == 0:
+                name = line[1:].strip()
+            elif lineno%3 == 1:
+                seq = line.strip()
+            else:
+                structure = line.strip()
+                records.append((name, seq, structure))
+    return records
+
 def read_rme(filename):
     """Read RME input format
     First line is a header: (name, 1-based position, pred, base)

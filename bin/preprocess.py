@@ -585,6 +585,26 @@ class SubsetGenomicDataByRegion(CommandLineTool):
         prepare_output_file(self.outfile)
         GenomicData.from_data(outnames, features={self.feature: outdata}).save(self.outfile)
 
+class NormalizeRtStopByBaseDensity(CommandLineTool):
+    arguments = [Argument('input_file', short_opt='-i', type=str, required=True,
+            help='Background filein GenomicData format'),
+        Argument('output_file', short_opt='-o', type=str, required=True,
+            help='output file in GenomicData format')]
+    def __call__(self):
+        import h5py
+
+        self.logger.info('read input file: ' + self.input_file)
+        data = GenomicData(self.input_file)
+        normalized_rt_stop = []
+        for name in data.names:
+            base_density = data.feature('base_density', name).astype(np.float32)
+            rt_stop = data.feature('rt_stop', name).astype(np.float32)
+            normalized_rt_stop.append((rt_stop + 1)/(base_density + 1))
+        self.logger.info('save file: ' + self.output_file)
+        prepare_output_file(self.output_file)
+        GenomicData.from_data(data.names, features={'rt_stop': normalized_rt_stop}).save(self.output_file)
+
+
 class CreateDatasetFromGenomicData(CommandLineTool):
     description = 'Create a training dataset from GenomicData format'
     arguments = [Argument('infile', short_opt='-i', type=str, required=True, help='HDF5 format'),
@@ -799,7 +819,7 @@ class CreateDatasetFromGenomicData(CommandLineTool):
             fout.create_dataset('names_test', data=names_test)
             fout.create_dataset('X_test',  data=X_test)
             fout.create_dataset('y_test',  data=y_test)
-            #fout.create_dataset('offset', data=self.offset)
+            fout.create_dataset('offset', data=self.offset)
             fout.close()
 
         if 0 < self.train_test_split < 1:
