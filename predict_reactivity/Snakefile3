@@ -1,4 +1,4 @@
-config: "config.json"
+config: "config.json3"
 
 def get_all_inputs(*steps):
     dataset_group = "icSHAPE"

@@ -1,0 +1,238 @@
+shell.prefix('set -x;')
+config: 'config.json'
+
+all_inputs = dict(
+    peaks_tcoord=expand('{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.bed',
+            output_dir=config['output_dir'], dataset=config['datasets'],
+            n_samples=30000, subset=config['subsets']),
+    get_icshape=expand('{output_dir}/{dataset}/{n_samples}/{subset}/peaks.icshape.{icshape_dataset}',
+            output_dir=config['output_dir'], dataset=config['datasets'],
+            n_samples=30000, subset=config['subsets'], icshape_dataset=config['icshape_datasets']),
+    overlap_icshape=expand('{output_dir}/{dataset}/{n_samples}/{subset}/peaks.icshape_transcripts.{icshape_dataset}',
+            output_dir=config['output_dir'], dataset=config['datasets'],
+            n_samples=30000, subset=config['subsets'], icshape_dataset=config['icshape_datasets']),
+    summarize_peak_length_from_ionmf=['reports/ionmf_motif/peak_length.summary.txt'],
+    get_peak_sequence=expand('{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.extended.fa',
+        output_dir=config['output_dir'], dataset=config['datasets'],
+        n_samples=30000, subset=config['subsets'], icshape_dataset=config['icshape_datasets']),
+    evaluate_model=expand('{output_dir}/{dataset}/{n_samples}/test_sample_{subset_index}/metrics.{model_name}.{icshape_dataset}',
+        output_dir=config['output_dir'], dataset=config['datasets'],
+        model_name=config['model_names'],
+        n_samples=30000, subset_index=config['subset_indices'], icshape_dataset=config['icshape_datasets']),
+    summarize_metrics=['reports/ionmf_motif/summarize_metrics.txt']
+)
+def get_all_inputs(*args):
+    inputs = []
+    for arg in args:
+        inputs += all_inputs[arg]
+    return inputs
+
+rule all:
+    input:
+        get_all_inputs('evaluate_model', 'summarize_metrics')
+
+rule extract_peaks_from_ionmf:
+    input:
+        config['ionmf_data_dir'] + '/{dataset}/{n_samples}/{subset}/sequences.fa.gz'
+    output:
+        '{output_dir}/{dataset}/{n_samples}/{subset}/peaks.bed'
+    run:
+        import re
+        import gzip
+        pat = re.compile(r'> ([^,]+),([^,]+),([^,]+),([^,]+); class:([01])')
+        fin = gzip.open(input[0], 'rt')
+        fout = open(output[0], 'w')
+        peak_id = 1
+        for line in fin:
+            if line.startswith('>'):
+                m = pat.match(line.strip())
+                fout.write('\t'.join((m.group(1), m.group(3), m.group(4), 
+                    str(peak_id), m.group(5), m.group(2))))
+                fout.write('\n')
+                peak_id += 1
+        fin.close()
+        fout.close()
+
+rule summarize_peak_length_from_ionmf:
+    input:
+        expand('{output_dir}/{dataset}/{n_samples}/{subset}/peaks.bed',
+            output_dir=config['output_dir'], dataset=config['datasets'],
+            n_samples=30000, subset=config['subsets'])
+    output:
+        'reports/ionmf_motif/peak_length.summary.txt'
+    run:
+        import numpy as np
+        import pandas as pd
+        counts = np.zeros((len(input), 300), dtype=np.int32)
+        records = []
+        for i, input_file in enumerate(input):
+            dataset, n_samples, subset, _ = input_file.split('/')[-4:]
+            records.append((dataset, n_samples, subset))
+            with open(input_file, 'r') as f:
+                for line in f:
+                    c = line.split('\t')
+                    counts[i, int(c[2]) - int(c[1])] += 1
+        lengths = np.nonzero(np.any(counts > 0, axis=0))[0]
+        records = pd.DataFrame.from_records(records, columns=('dataset', 'n_samples', 'subset'))
+        for length in lengths:
+            records[str(length)] = counts[:, length]
+        records.to_csv(output[0], sep='\t', header=True, index=False)
+
+rule annotate_transcript_id:
+    input:
+        peaks= '{output_dir}/{dataset}/{n_samples}/{subset}/peaks.bed',
+        transcripts='data/gtf/{annotation}/annotations/exon.longest_transcript.bed'.format(annotation=config['annotation'])
+    output:
+        '{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_id.bed'
+    shell:
+        r'''bedtools intersect -s -wb -a {input.peaks} -b {input.transcripts} \
+        | awk 'BEGIN{{OFS="\t"}}{{print $1,$2,$3,$4,$5,$6,$10}}' > {output}'''
+
+rule genepred_to_bed12:
+    input:
+        'data/gtf/{annotation}/{annotation}.annotation.genePred'.format(annotation=config['annotation'])
+    output:
+        'data/gtf/{annotation}/{annotation}.annotation.bed12'.format(annotation=config['annotation'])
+    shell:
+        r'''awk 'BEGIN{{OFS="\t"}}{{
+    exonCount=$8
+    split($9,exonStarts,",");
+    blockStarts="";
+    blockSizes="";
+    for(i=1;i<=exonCount;i++) {{if(i>1){{blockStarts=blockStarts ","}} blockStarts=blockStarts exonStarts[i]-$4}}
+    split($10,exonEnds,",");
+    for(i=1;i<=exonCount;i++) {{if(i>1){{blockSizes=blockSizes ","}} blockSizes=blockSizes exonEnds[i]-exonStarts[i]}}
+    print $2,$4,$5,$1,0,$3,0,0,0,exonCount,blockSizes,blockStarts
+}}' {input} > {output}'''
+
+rule gcoord_to_tcoord:
+    input:
+        transcripts='data/gtf/{annotation}/{annotation}.annotation.bed12'.format(annotation=config['annotation']),
+        peaks='{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_id.bed'
+    output:
+        '{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.bed'
+    shell:
+        r'''awk 'BEGIN{{OFS="\t"}} FNR==NR{{txStart[$4]=$2;blockCount[$4]=$10;blockSizes[$4]=$11;blockStarts[$4]=$12;next}}
+    {{txid=$7;
+    split(blockStarts[txid],blockStartsList,",");
+    split(blockSizes[txid],blockSizesList,",");
+    for(i=1;i<=blockCount[txid];i++) blockEndsList[i]=blockStartsList[i]+blockSizesList[i];
+    txStarts[1]=0
+    for(i=2;i<=blockCount[txid];i++) txStarts[i]=txStarts[i-1]+blockSizesList[i-1]
+    txLength=txStarts[blockCount[txid]]+blockSizesList[blockCount[txid]]
+    teStart=$2-txStart[txid];
+    for(i=1;i<=blockCount[txid];i++){{if(teStart<blockEndsList[i]){{start=teStart-blockStartsList[i]+txStarts[i];break}} }}
+    teEnd=$3-txStart[txid];
+    for(i=1;i<=blockCount[txid];i++){{if(teEnd<=blockEndsList[i]){{end=teEnd-blockStartsList[i]+txStarts[i];break}} }}
+    if($6=="-"){{t=txLength-start;start=txLength-end;end=t}}
+    print txid,start,end,$4,$5,"+"
+    }}' {input.transcripts} {input.peaks} > {output}'''
+
+rule overlap_icshape:
+    input:
+        icshape='output/icSHAPE_preprocess/{icshape_dataset}/icshape.out',
+        peaks='{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.bed'
+    output:
+        '{output_dir}/{dataset}/{n_samples}/{subset}/peaks.icshape_transcripts.{icshape_dataset}'
+    shell:
+        r'''awk -F'\t' 'FNR==NR{{tx_ids[$1]=1;next}} {{if($1 in tx_ids) print}}' {input.icshape} {input.peaks} > {output}'''
+
+rule extend_peaks:
+    input:
+        peaks='{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.bed',
+        transcripts='data/gtf/{annotation}/{annotation}.annotation.bed12'.format(annotation=config['annotation'])
+    output:
+        '{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.extended.bed'
+    run:
+        tx_lengths = {}
+        with open(input.transcripts, 'r') as fin:
+            for line in fin:
+                c = line.split('\t')
+                l = c[-2].split(',')
+                if l[-1] == ',':
+                    l = l[:-1]
+                tx_lengths[c[3]] = sum(int(a) for a in l)
+        fout = open(output[0], 'w')
+        window_size = 100
+        with open(input.peaks, 'r') as fin:
+            for line in fin:
+                c = line.split('\t')
+                start, end = int(c[1]), int(c[2])
+                length = end - start
+                # discard peaks shorter than window_size//2
+                if length < window_size//2:
+                    continue
+                if length < window_size:
+                    start = max(0, start - (window_size - length)//2)
+                    end = start + window_size
+                    # discard peaks in transcripts shorter than window_size
+                    if end > tx_lengths[c[0]]:
+                        continue
+                c[1] = str(start)
+                c[2] = str(end)
+                fout.write('\t'.join(c))
+        fout.close()
+
+rule get_peak_sequence:
+    input:
+        bed='{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.extended.bed',
+        fasta='output/transcriptomes/hg19_gencode_v19_longest.fa'
+    output:
+        '{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.extended.fa'
+    shell:
+        r'''bedtools getfasta -fi {input.fasta} -bed {input.bed} -name \
+            > {output}'''
+
+rule get_icshape:
+    input:
+        peaks='{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.extended.bed',
+        icshape='output/icSHAPE/reactivities/Lu_2016_invitro.hg19_gencode_v19_longest/icshape.h5'
+    output:
+        '{output_dir}/{dataset}/{n_samples}/{subset}/peaks.icshape.{icshape_dataset}'
+    shell:
+        r'''bin/find_motif.py get_icshape --bed-file {input.peaks} --icshape-file {input.icshape} -o {output}'''
+
+rule create_dataset:
+    input:
+        reactivities='{output_dir}/{dataset}/{n_samples}/{subset}/peaks.icshape.{icshape_dataset}',
+        peaks='{output_dir}/{dataset}/{n_samples}/{subset}/peaks.bed',
+        sequences='{output_dir}/{dataset}/{n_samples}/{subset}/peaks.transcript_coord.extended.fa'
+    output:
+        '{output_dir}/{dataset}/{n_samples}/{subset}/dataset.{icshape_dataset}'
+    wildcard_constraints:
+        subset="(training_sample_[0-9])|(test_sample_[0-9])"
+    shell:
+        r'''bin/find_motif.py create_dataset --peak-file {input.peaks} --sequence-file {input.sequences} \
+        --reactivity-file {input.reactivities} -o {output}'''
+
+rule train_model:
+    input:
+        '{output_dir}/{dataset}/{n_samples}/training_sample_{subset_index}/dataset.{icshape_dataset}'
+    output:
+        '{output_dir}/{dataset}/{n_samples}/training_sample_{subset_index}/model.{model_name}.{icshape_dataset}'
+    wildcard_constraints:
+        subset_index="[0-9]+"
+    shell:
+        r'''bin/predict_reactivity.py train -i {input} -m {wildcards.model_name} --model-file {output} --xname X --yname y'''
+
+rule evaluate_model:
+    input:
+        dataset='{output_dir}/{dataset}/{n_samples}/test_sample_{subset_index}/dataset.{icshape_dataset}',
+        model='{output_dir}/{dataset}/{n_samples}/training_sample_{subset_index}/model.{model_name}.{icshape_dataset}'
+    output:
+        '{output_dir}/{dataset}/{n_samples}/test_sample_{subset_index}/metrics.{model_name}.{icshape_dataset}'
+    wildcard_constraints:
+        subset_index="[0-9]+"
+    shell:
+        r'''bin/predict_reactivity.py evaluate -i {input.dataset} --model-file {input.model} -o {output} --xname X --yname y'''
+
+rule summarize_metrics:
+    input:
+        expand('{output_dir}/{dataset}/{n_samples}/test_sample_{subset_index}/metrics.{model_name}.{icshape_dataset}',
+            output_dir=config['output_dir'], dataset=config['datasets'],
+            model_name=config['model_names'],
+            n_samples=30000, subset_index=config['subset_indices'], icshape_dataset=config['icshape_datasets'])
+    output:
+        'reports/ionmf_motif/summarize_metrics.txt'
+    shell:
+        r'''bin/find_motif.py summarize_metrics -i {input} -o {output}'''

@@ -4,19 +4,8 @@
             "Cell_2018_cellfree_SHAPE",
             "Cell_2018_incell_SHAPE",
             "Cell_2018_kasugamycin_SHAPE"],
-        "icSHAPE_available": [
-            "Spitale_2015_invivo_mm10",
-            "Spitale_2015_invitro_mm10",
-            "Lu_2016_invitro_hg38", 
-            "Lu_2016_invivo_hg38",
-            "Lu_2016_invitro_hg19_longest",
-            "Lu_2016_invivo_hg19_longest"
-        ],
         "icSHAPE": [
-            "Lu_2016_invitro_hg19_longest",
-            "Lu_2016_invivo_hg19_longest",
-            "Lu_2016_invitro_hg38", 
-            "Lu_2016_invivo_hg38"
+            "Lu_2016_invitro_hg38"
         ],
         "model_RNAs": ["model_RNAs_domains"]
     },
@@ -30,7 +19,7 @@
         "patteRNA_viterbi"],
     "binarization_percentiles": [5, 10, 20, 30],
     "output_dir": "output/predict_reactivity",
-    "model_names": ["basic", "mlp1", "conv1", "resnet1","blstm3"],
+    "model_names": ["basic", "mlp1", "conv1", "resnet1"],
     "cv_n_folds": 5,
     "window_size": 128
 }

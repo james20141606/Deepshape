@@ -16,6 +16,32 @@ from keras.layers.normalization import BatchNormalization
 from keras.layers.wrappers import Bidirectional
 from keras.layers.recurrent import LSTM
 from keras import backend as K
+import tensorflow as tf
+import os
+import subprocess
+import re
+def get_gpu_load():
+    out = subprocess.check_output("nvidia-smi")
+    gpu_load = []
+    for line in out.split('\n'):
+        if re.search(r'[0-9]+%\s+[0-9]+C', line) is not None:
+            c = int(line.split()[12].strip('%'))
+            gpu_load.append(c)
+    return gpu_load
+
+
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID" # so the IDs match nvidia-smi
+os.environ["CUDA_VISIBLE_DEVICES"] =str(np.random.randint(2)+3)#str(np.argmin(get_gpu_load()))
+
+from keras.backend.tensorflow_backend import set_session
+config = tf.ConfigProto()
+#config.gpu_options.per_process_gpu_memory_fraction = 0.99
+config.gpu_options.allow_growth =True
+set_session(tf.Session(config=config))
+
+
+
+
 
 def basic(window_size, regression=False, dense=False):
     model = Sequential()
