@@ -1,9 +1,7 @@
-from __future__ import print_function
-from sklearn.datasets import make_classification
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, accuracy_score
 import numpy as np
-import keras
+import h5py
+from generative_models import GenerativeModel, parameter
+# import keras modules
 from keras.models import Sequential
 from keras.layers import Input
 from keras.layers.core import Dense, Dropout, Activation, Flatten, Lambda, Reshape
@@ -16,152 +14,78 @@ from keras.layers.normalization import BatchNormalization
 from keras.layers.wrappers import Bidirectional
 from keras.layers.recurrent import LSTM
 from keras import backend as K
-from functools import partial
 
+class Encoder(object):
+    def __init__(self, n_latent=2):
+        self.n_latent = n_latent
+    
+    def __call__(self, x):
+        '''Build an encoder network
+        Args:
+            x: input tensor of shape [batch_size] + input_shape
+        Returns:
+            tensor of shape [batch_size, n_latent*2]
+        '''
+        raise NotImplementedError('this function must be implemented by subclasses')
+    
+class SimpleEncoder(Encoder):
+    def __call__(self, x):
+        if len(x.shape) > 2:
+            x = Flatten(name='encoder_flatten')(x)
+        x = Dense(self.n_latent*2, name='encoder_dense')(x)
+        return x
 
-class ModelFunction(object):
-    def __call__(self, window_size, n_channels=4, regression=False, dense=False):
-        raise NotImplementedError('class ModelFunction must be subclassed')
-
-class basic(ModelFunction):
-    def __call__(self, window_size, n_channels=4, regression=False, dense=False):
-        model = Sequential()
-        model.add(Flatten(input_shape=(window_size, n_channels)))
-        model.add(Dense(64))
-        model.add(Activation('relu'))
-        model.add(Dense(64))
-        model.add(Activation('relu'))
-        output_size = window_size if dense else 1
-        model.add(Dense(output_size))
-        if not regression:
-            model.add(Activation('sigmoid'))
-        return model
-
-class conv1(ModelFunction):
-    def __call__(self, window_size, n_channels=4, regression=False, dense=False):
-        model = Sequential()
-        model.add(Conv1D(64, 5, padding='valid', input_shape=(window_size, n_channels), kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        model.add(MaxPooling1D(2))
-        model.add(Conv1D(64, 4, padding='valid', kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        model.add(MaxPooling1D(2))
-        model.add(Conv1D(64, 4, padding='valid', kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        model.add(MaxPooling1D(2))
-        model.add(Flatten())
-        model.add(Dense(64, kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        output_size = window_size if dense else 1
-        model.add(Dense(output_size, kernel_regularizer=l2(0.0001)))
-        if not regression:
-            model.add(Activation('sigmoid'))
-        return model
-
-class conv1_motif(ModelFunction):
-    def __call__(self, window_size, n_channels=4, regression=False, dense=False):
-        model = Sequential()
-        model.add(Conv1D(64, 7, padding='valid', input_shape=(window_size, n_channels), kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        model.add(MaxPooling1D(2))
-        model.add(Conv1D(64, 3, padding='valid', kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        model.add(MaxPooling1D(2))
-        model.add(Conv1D(64, 3, padding='valid', kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        model.add(MaxPooling1D(2))
-        model.add(Flatten())
-        model.add(Dense(64, kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        output_size = window_size if dense else 1
-        model.add(Dense(output_size, kernel_regularizer=l2(0.0001)))
-        if not regression:
-            model.add(Activation('sigmoid'))
-        return model
-
-class mlp1(ModelFunction):
-    def __call__(self, window_size, n_channels=4, regression=False, dense=False):
-        model = Sequential()
-        model.add(Flatten(input_shape=(window_size, n_channels)))
-        model.add(Dense(64, kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        model.add(Dense(64, kernel_regularizer=l2(0.0001)))
-        model.add(Activation('relu'))
-        output_size = window_size if dense else 1
-        model.add(Dense(output_size, kernel_regularizer=l2(0.0001)))
-        if not regression:
-            model.add(Activation('sigmoid'))
-        return model
-
-class resnet1(ModelFunction):
-    def __call__(self, window_size, n_channels=4, regression=False, dense=False):
-        input = Input(shape=(window_size, n_channels))
-        x = Conv1D(64, n_channels, padding='same', activation='relu')(input)
-        for i in range(5):
-            output = Conv1D(64, 3, padding='same', activation='relu')(x)
-            output = Conv1D(64, 3, padding='same')(output)
-            output = Add()([x, output])
-            output = Activation('relu')(output)
-            x = output
-        output = AveragePooling1D(2)(output)
-        output = Flatten()(output)
-        output_size = window_size if dense else 1
-        output = Dense(output_size)(output)
-        if not regression:
-            output = Activation('sigmoid')(output)
-        model = Model(inputs=[input], outputs=[output])
-        return model
-
-class blstm3(ModelFunction):
-    def __call__(self, window_size, n_channels=4, regression=False, dense=False):
-        model = Sequential()
-        model.add(Bidirectional(LSTM(150, return_sequences=True), input_shape=(window_size, n_channels), merge_mode='ave'))
-        model.add(Bidirectional(LSTM(1, return_sequences=True), merge_mode='ave'))
-        model.add(Flatten())
-        output_size = window_size if dense else 1
-        model.add(Dense(output_size, kernel_regularizer=l2(0.0001)))
-        if regression:
-            model.add(Activation('sigmoid'))
-        return model
-
-class MotifClassifier(object):
-    def __init__(self, window_size=512, n_classes=2, n_channels=4, n_conv_layers=1):
-        input_layer = Input(shape=(window_size, n_channels), name='input')
-        output = input_layer
-        if n_conv_layers >= 1:
-            output = Conv1D(64, 8, padding='same', name='conv1')(output)
-            output = Activation('relu', name='relu1')(output)
-        if n_conv_layers >= 2:
-            output = MaxPooling1D(4, name='maxpool1')(output)
-            output = Conv1D(128, 3, padding='same', name='conv2')(output)
-            output = Activation('relu', name='relu2')(output)
-        if n_conv_layers >= 3:
-            output = MaxPooling1D(4, name='maxpool2')(output)
-            output = Conv1D(128, 3, padding='same', name='conv3')(output)
-            output = Activation('relu', name='relu3')(output)
-        if n_conv_layers >= 4:
-            output = MaxPooling1D(4, name='maxpool3')(output)
-            output = Conv1D(128, 3, padding='same', name='conv4')(output)
-            output = Activation('relu', name='relu4')(output)
-        if n_conv_layers > 0:
-            output = GlobalMaxPooling1D(name='global_maxpool')(output)
+class MLPEncoder(Encoder):
+    def __init__(self, n_latent=2, layers=None):
+        super(MLPEncoder, self).__init__(n_latent)
+        if layers is not None:
+            self.layers = layers
         else:
-            output = Flatten(name='flatten')(output)
-        if n_classes == 2:
-            output = Dense(1, name='dense1')(output)
-            output = Activation('sigmoid', name='output')(output)
-            model = Model(inputs=[input_layer], outputs=[output])
-            model.compile(loss='binary_crossentropy',
-                      metrics=['binary_accuracy'],
-                      optimizer='Adam')
-        elif n_classes > 2:
-            output = Dense(n_classes, name='dense1')(output)
-            output = Activation('softmax', name='output')(output)
-            model = Model(inputs=[input_layer], outputs=[output])
-            model.compile(loss='categorical_crossentropy',
-                      metrics=['categorical_accuracy'],
-                      optimizer='Adam')
-        self.model = model
+            self.layers = []
+
+    def add_layer(self, n_hidden):
+        self.layers.append(n_hidden)
+
+    def __call__(self, x):
+        if len(x.shape) > 2:
+            x = Flatten(name='encoder_flatten')(x)
+        for i, n_hidden in enumerate(self.layers):
+            x = Dense(n_hidden, name='encoder_dense{}'.format(i + 1), activation='relu')(x)
+        x = Dense(self.n_latent*2, name='encoder_output', activation='relu')(x)
+        return x
+
+class Decoder(object):
+    def __init__(self, output_shape, activation=None):
+        if not (isinstance(output_shape, list) or isinstance(output_shape, tuple)):
+            output_shape = (output_shape)
+        self.output_shape = output_shape
+        self.activation = activation
+    
+    def __call__(self, x):
+        '''Build a decoder network
+        Args:
+            x: input tensor of shape [batch_size, n_latent]
+        Returns:
+            tensor of shape [batch_size] + output_shape
+        '''
+        raise NotImplementedError('this function must be implemented by subclasses')
+
+class SimpleDecoder(Decoder):
+    def __call__(self, x):
+        x = Dense(np.prod(self.output_shape), name='decoder_dense')(x)
+        if len(self.output_shape) > 1:
+            x = Reshape(self.output_shape, name='output_reshape')(x)
+        if self.activation is not None:
+            x = Activation(self.activation, name='output_activation')(x)
+        return x
+
+class SequenceDecoder(Decoder):
+    def __call__(self, x):
+        length, n_channels = self.output_shape
+        x = Dense(length*n_channels, name='decoder_dense')(x)
+        x = Reshape((length, n_channels), name='output_reshape')(x)
+        x = Lambda(lambda x: K.softmax(x, axis=-1), name='output_activation')(x)
+        return x
 
 def random_multinomial(p):
     '''Draw a sample from multinomial distributions
@@ -187,7 +111,136 @@ def batch_generator(X, batch_size=25):
     if n_remains > 0:
         yield X[-n_remains:]
 
-class MotifVariationalAutoencoder(object):
+class VariationalAutoencoder(GenerativeModel):
+    def __init__(self, input_shape, encoder, decoder, 
+            n_latent=2, n_sampler=10, 
+            likelihood='categorical',
+            batch_size=25, epochs=10):
+        if not (isinstance(input_shape, list) or isinstance(input_shape, tuple)):
+            input_shape = [input_shape]
+        else:
+            input_shape = list(input_shape)
+        self.input_shape = input_shape
+        self.n_latent = n_latent
+        self.encoder = encoder
+        self.decoder = decoder
+        self.n_sampler = n_sampler
+        self.likelihood = likelihood
+        self.batch_size =  batch_size
+        self.epochs = epochs
+        self.build()
+    
+    def build(self):
+        # build encoder network
+        input_layer = Input(shape=self.input_shape, name='input')
+        encoder_output = self.encoder(input_layer)
+        # build latent network
+        latent_params = Dense(self.n_latent*2, name='latent_params')(encoder_output)
+        logvar = Lambda(lambda x: K.clip(x[:, :self.n_latent], -5, 5), name='logvar')(latent_params)
+        mu = Lambda(lambda x: x[:, self.n_latent:], name='mu')(latent_params)
+        var = Lambda(lambda x: K.exp(x), name='var')(logvar)
+        std = Lambda(lambda x: K.sqrt(x), name='std')(var)
+        gaussian_sampler = Lambda(lambda x: K.random_normal((K.shape(x)[0], self.n_sampler, self.n_latent)),
+            name='gaussian_sampler')(input_layer)
+        latent_sampler = Lambda(lambda x: x[0]*K.expand_dims(x[2], axis=1) + K.expand_dims(x[1], axis=1),
+            name='latent_sampler')([gaussian_sampler, mu, std])
+        latent_values = Lambda(lambda x: K.reshape(x, (-1, self.n_latent)), name='latent')(latent_sampler)
+        # build decoder network
+        decoder_output = self.decoder(latent_values)
+        output = Lambda(lambda x: K.mean(K.reshape(x, [-1, self.n_sampler] + self.input_shape), axis=1),
+            name='output_mean')(decoder_output)
+        # define loss functions
+        def kl_loss(y_true, y_pred):
+            KL = 0.5*K.sum(var + K.square(mu) - 1 - K.log(var), axis=1)
+            return KL
+            
+        def sequence_nll_loss(y_true, y_pred):
+            y_shape = K.shape(y_true)
+            y_true = K.reshape(y_true, (-1, y_shape[-1]))
+            y_pred = K.reshape(y_pred, (-1, y_shape[-1]))
+            NLL = K.categorical_crossentropy(y_true, y_pred)
+            NLL = K.sum(K.reshape(NLL, (-1, y_shape[1])), axis=1)
+            return NLL
+        
+        def sequence_accuracy(y_true, y_pred):
+            return K.mean(K.cast(K.equal(K.argmax(y_true, axis=-1),
+                        K.argmax(y_pred, axis=-1)),
+                        K.floatx()), axis=1)
+        
+        def sequence_vae_loss(y_true, y_pred):
+            return sequence_nll_loss(y_true, y_pred) + kl_loss(y_true, y_pred)
+
+        def nll_loss(y_true, y_pred):
+            NLL = K.categorical_crossentropy(y_true, y_pred)
+            return NLL
+                
+        #def vae_loss(y_true, y_pred):
+        #    return nll_loss(y_true, y_pred) + kl_loss(y_true, y_pred)
+
+        import likelihoods
+        ll = getattr(likelihoods, self.likelihood)
+        def vae_loss(y_true, y_pred):
+            return -ll(y_true, y_pred) + kl_loss(y_true, y_pred)
+        
+        # build training model
+        model = Model(inputs=[input_layer], outputs=[output])
+        model.compile(loss=vae_loss,
+            metrics=[sequence_accuracy, kl_loss, nll_loss],
+            optimizer='Adam')
+        self.model = model
+        # build log likelihood function
+        ll_input = Input(shape=self.input_shape, name='ll_input')
+        ll_output = ll(ll_input, output)
+        self.ll_function = K.function([ll_input, latent_sampler], [ll_output])
+        # build function for generating new samples
+        self.sampler_function = K.function([ll_input, latent_values], [output])
+    
+    def logL(self, X):
+        ll_values = []
+        for X_batch in batch_generator(X, batch_size=self.batch_size):
+            sampler_batch = np.random.normal(size=(X_batch.shape[0], self.n_sampler, self.n_latent))
+            ll_values.append(self.ll_function([X_batch, sampler_batch])[0])
+        return np.concatenate(ll_values)
+    
+    def sample(self, size=10):
+        X = []
+        for indices in batch_generator(np.arange(size), batch_size=self.batch_size):
+            sampler_batch = np.random.normal(size=(indices.shape[0], self.n_latent))
+            p = self.sample_function([sampler_batch])[0]
+            X.append(random_multinomial(p))
+        X = np.concatenate(X, axis=0)
+        return X
+    
+    def fit(self, X, weights=None, verbose=0):
+        self.model.fit(X, X, batch_size=self.batch_size, epochs=self.epochs, sample_weight=weights, verbose=verbose)
+    
+    def init_params(self):
+        session = K.get_session()
+        for layer in self.model.layers:
+            if hasattr(layer, 'kernel_initializer'):
+                layer.kernel.initializer.run(session=session)
+
+class MixtureDensityVAE(GenerativeModel):
+    def __init__(self, input_shape, encoder, decoders, 
+            n_latent=2, n_sampler=10, 
+            likelihood='categorical',
+            batch_size=25, epochs=10):
+        self.input_shape = input_shape
+        self.encoder = encoder,
+        self.decoders = decoders,
+        self.n_latent = n_latent
+        self.build()
+
+    def init_params(self):
+        session = K.get_session()
+        for layer in self.model.layers:
+            if hasattr(layer, 'kernel_initializer'):
+                layer.kernel.initializer.run(session=session)
+                
+    def build(self):
+        pass
+        
+class MotifVariationalAutoencoder(GenerativeModel):
     def build_encoder(self, input_layer, name='conv', n_layers=1):
         if name == 'conv':
             encoder = Conv1D(64, 8, padding='same', activation='relu', name='encoder_conv1')(input_layer)
@@ -318,13 +371,4 @@ class MotifVariationalAutoencoder(object):
             X.append(random_multinomial(p))
         X = np.concatenate(X, axis=0)
         return X
-
-model_functions = {cls.__name__:cls() for cls in ModelFunction.__subclasses__()}
-
-def get_model(name):
-    if name.endswith('.seq_only'):
-        return model_functions[name.strip('.seq_only')]
-    elif name.endswith('.observed_reactivity') or name.endswith('.predicted_reactivity'):
-        return partial(model_functions[name.split('.')[0]], n_channels=5)
-    else:
-        return model_functions[name]
+        

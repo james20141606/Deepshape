@@ -4,12 +4,21 @@ from six.moves import range, xrange
 
 import argparse, sys, os, errno
 import logging
-logging.basicConfig(level=logging.DEBUG, format='[%(asctime)s] [%(levelname)s] %(name)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(name)s: %(message)s')
 import numpy as np
 import numba
 import h5py
 
 alphabet = 'ATCG'
+
+def set_keras_num_threads(n_threads):
+    from keras import backend as K
+    import tensorflow as tf
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    config.intra_op_parallelism_threads = n_threads
+    config.inter_op_parallelism_threads = n_threads
+    K.set_session(tf.Session(config=config))
 
 def detect_model_format(filename):
     with open(filename, 'rb') as f:
@@ -119,7 +128,7 @@ def sequences_to_windows(sequences, window_size=10, stride=1, mode='valid'):
     lengths = np.asarray([a.shape[0] for a in windows])
     ends = np.cumsum(lengths)
     starts = ends - lengths
-    windows = np.concatenate([onehot_encode(x) for x in windows], axis=0)
+    windows = np.concatenate([onehot(x) for x in windows], axis=0)
     return windows, starts, ends
 
 def onehot_encode(x, alphabet='ATCG'):
@@ -134,7 +143,7 @@ def train(args):
     import numpy as np
     import keras
     import h5py
-    import models
+    from models import get_model
     from ioutils import prepare_output_file, make_dir
 
     logger.info('load training data: ' + args.input_file)
@@ -152,8 +161,11 @@ def train(args):
         fin.close()
         valid_data = (X_valid, y_valid)
 
+    if args.n_threads >= 1:
+        logger.info('set number of threads to {} for TensorFlow'.format(args.n_threads))
+        set_keras_num_threads(args.n_threads)
     window_size = X_train.shape[1]
-    model = getattr(models, args.model)(window_size)
+    model = get_model(args.model)(window_size)
     if args.regression:
         loss = 'mean_squared_error'
         metrics = ['mean_squared_error']
@@ -193,6 +205,10 @@ def evaluate(args):
     import six.moves.cPickle as pickle
     from ioutils import prepare_output_file, make_dir
             
+    if args.n_threads >= 1:
+        logger.info('set number of threads to {} for TensorFlow'.format(args.n_threads))
+        set_keras_num_threads(args.n_threads)
+
     logger.info('load model: {}'.format(args.model_file))
     model_format = detect_model_format(args.model_file)
     logger.info('detected model format: ' + model_format)
@@ -291,6 +307,10 @@ def predict(args):
     import six.moves.cPickle as pickle
     from ioutils import prepare_output_file, make_dir
     from formats import read_fasta
+
+    if args.n_threads >= 1:
+        logger.info('set number of threads to {} for TensorFlow'.format(args.n_threads))
+        set_keras_num_threads(args.n_threads)
 
     logger.info('load model: {}'.format(args.model_file))
     model_format = detect_model_format(args.model_file)
@@ -599,6 +619,7 @@ if __name__ == '__main__':
     parser.add_argument('--regression', action='store_true', help='use regression model')
     parser.add_argument('--batch-size', type=int, default=50)
     parser.add_argument('--epochs', type=int, default=20)
+    parser.add_argument('--n-threads', '-p', type=int, default=8)
     parser.add_argument('--xname', type=str, default='X_train', help='training data matrix name')
     parser.add_argument('--yname', type=str, default='y_train', help='training target name')
     parser.add_argument('--tensorboard-log-dir', type=str, help='output directory for TensorBoard')
@@ -612,8 +633,9 @@ if __name__ == '__main__':
     parser.add_argument('--input-file', '-i', type=str, required=True, help='input training data')
     parser.add_argument('--model-file', type=str, required=True, help='file path for saving the model')
     parser.add_argument('--model-format', type=str, default='keras', choices=('keras', 'sklearn'))
-    parser.add_argument('--output-file', '-o', type=str, help='output file to write the prediction and metrics to')
+    parser.add_argument('--output-file', '-o', type=str, required=True, help='output file to write the prediction and metrics to')
     parser.add_argument('--batch-size', type=int, default=100)
+    parser.add_argument('--n-threads', '-p', type=int, default=8)
     parser.add_argument('--swap-labels', action='store_true', help='swap 0/1 predictions')
     parser.add_argument('--metrics', type=list, default=['accuracy', 'roc_auc'],
         help='a metric name defined in sklearn.metrics.get_scorer')
@@ -643,25 +665,26 @@ if __name__ == '__main__':
         help='a text summary table file')
 
     parser = subparsers.add_parser('predict')
-    parser.add_argument('--input-file', '-i', type=str, required=True, help='sequence file in FASTA format'),
+    parser.add_argument('--input-file', '-i', type=str, required=True, help='sequence file in FASTA format')
     parser.add_argument('--format', type=str, default='fasta',
         choices=('ct', 'ct_dir', 'fasta', 'rnafold', 'genomic_data'),
         help='input file format (fasta or ct)'),
-    parser.add_argument('--model-file', type=str, required=True, help='file path for saving the model'),
-    parser.add_argument('--offset', type=int, required=False, help='offset of the base in the window to predict'),
-    parser.add_argument('--output-file', '-o', type=str, help='output file to write the prediction to'),
-    parser.add_argument('--cutoff', type=float, default=0.5, help='cutoff for converting predictions to binary labels'),
-    parser.add_argument('--batch-size', type=int, default=200),
-    parser.add_argument('--dense', action='store_true'),
+    parser.add_argument('--model-file', type=str, required=True, help='file path for saving the model')
+    parser.add_argument('--offset', type=int, required=False, help='offset of the base in the window to predict')
+    parser.add_argument('--output-file', '-o', type=str, help='output file to write the prediction to')
+    parser.add_argument('--cutoff', type=float, default=0.5, help='cutoff for converting predictions to binary labels')
+    parser.add_argument('--batch-size', type=int, default=200)
+    parser.add_argument('--dense', action='store_true')
+    parser.add_argument('--n-threads', '-p', type=int, default=8)
     parser.add_argument('--metrics', type=list, default='accuracy,roc_auc,ppv,sensitivity',
-        help='a metric name defined in sklearn.metrics.get_scorer'),
-    parser.add_argument('--fillna', type=float, help='fill missing values with a constant'),
-    parser.add_argument('--alphabet', default='ATCG'),
-    parser.add_argument('--swap-labels', action='store_true', help='swap 0/1 predictions'),
-    parser.add_argument('--split', action='store_true', help='output separate files in the output directory'),
-    parser.add_argument('--restraint-file', type=str, help='restraint file for RME'),
-    parser.add_argument('--metric-file', type=str, help='prediction scores and metrics'),
-    parser.add_argument('--metric-by-sequence-file', type=str, help='a text table with metrics calculated for each sequence'),
+        help='a metric name defined in sklearn.metrics.get_scorer')
+    parser.add_argument('--fillna', type=float, help='fill missing values with a constant')
+    parser.add_argument('--alphabet', default='ATCG')
+    parser.add_argument('--swap-labels', action='store_true', help='swap 0/1 predictions')
+    parser.add_argument('--split', action='store_true', help='output separate files in the output directory')
+    parser.add_argument('--restraint-file', type=str, help='restraint file for RME')
+    parser.add_argument('--metric-file', type=str, help='prediction scores and metrics')
+    parser.add_argument('--metric-by-sequence-file', type=str, help='a text table with metrics calculated for each sequence')
     parser.add_argument('--dense-pred-file', type=str, help='output dense predictions')
 
     args = main_parser.parse_args()

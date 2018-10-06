@@ -45,12 +45,24 @@ def create_dataset(args):
     peaks.index = peaks['peak_id']
     logger.info('read sequence file: ' + args.sequence_file)
     sequences = {name:seq for name, seq in read_fasta(args.sequence_file)}
-    logger.info('read reactivity file: ' + args.reactivity_file)
-    reactivities = {}
-    with h5py.File(args.reactivity_file, 'r') as f:
-        for peak_id in f.keys():
-            reactivities[peak_id.split(',')[0]] = f[peak_id][:]
-    peak_ids = list(sorted(reactivities.keys()))
+    if args.reactivity_file is not None:
+        logger.info('read reactivity file: ' + args.reactivity_file)
+        reactivities = {}
+        with h5py.File(args.reactivity_file, 'r') as f:
+            for peak_id in f.keys():
+                reactivities[peak_id.split(',')[0]] = f[peak_id][:]
+        peak_ids = []
+        for peak_id in sequences.keys():
+            if peak_id in reactivities:
+                coverage = np.sum(~np.isnan(reactivities[peak_id]))
+            else:
+                coverage = 0
+            if coverage >= args.min_coverage:
+                peak_ids.append(peak_id)
+                if coverage == 0:
+                    reactivities[peak_id] = np.full(len(sequences[peak_id]), np.nan, dtype=np.float32)
+    else:
+        peak_ids = list(sorted(sequences.keys()))
 
     def onehot_encode(x, alphabet='ATCG'):
         alphabet = np.frombuffer(bytearray(alphabet, encoding='ascii'), dtype='S1')
@@ -60,10 +72,13 @@ def create_dataset(args):
 
     X_seq = np.concatenate([np.frombuffer(bytearray(sequences[peak_id], encoding='ascii'), dtype='S1')[np.newaxis, :] for peak_id in peak_ids], axis=0)
     X_seq = onehot_encode(X_seq)
-    X_r   = np.concatenate([reactivities[peak_id][np.newaxis, :, np.newaxis] for peak_id in peak_ids], axis=0)
-    # imputate reactivities with median values
-    X_r[np.isnan(X_r)] = np.nanmedian(X_r.flatten())
-    X = np.concatenate([X_seq, X_r], axis=2)
+    if args.reactivity_file is not None:
+        X_r   = np.concatenate([reactivities[peak_id][np.newaxis, :, np.newaxis] for peak_id in peak_ids], axis=0)
+        # imputate reactivities with median values
+        X_r[np.isnan(X_r)] = np.nanmedian(X_r.flatten())
+        X = np.concatenate([X_seq, X_r], axis=2)
+    else:
+        X = X_seq
     y = peaks['label'][peak_ids]
     logger.info('create output file: ' + args.output_file)
     with h5py.File(args.output_file, 'w') as fout:
@@ -74,7 +89,6 @@ def summarize_metrics(args):
     import numpy as np
     import h5py
     import pandas as pd
-    from tqdm import tqdm
     from ioutils import open_file_or_stdout
 
     def parse_filename(filename):
@@ -82,7 +96,8 @@ def summarize_metrics(args):
         d = {'dataset': c[2],
             'cv_index': c[4].split('_')[-1],
             'model_name': c[-1].split('.')[1],
-            'icshape_dataset': c[-1].split('.')[2]
+            'featureset': c[-1].split('.')[2],
+            'icshape_dataset': c[-1].split('.')[3]
         }
         return d
 
@@ -94,7 +109,7 @@ def summarize_metrics(args):
             d['roc_auc'] = f['metrics/roc_auc'][()]
             summary.append(d)
     summary = pd.DataFrame.from_records(summary)
-    summary = summary[['dataset', 'icshape_dataset', 'model_name', 'cv_index', 'accuracy', 'roc_auc']]
+    summary = summary[['dataset', 'icshape_dataset', 'model_name', 'featureset', 'cv_index', 'accuracy', 'roc_auc']]
     with open_file_or_stdout(args.output_file) as fout:
         summary.to_csv(fout, sep='\t', index=False)
 
@@ -118,8 +133,10 @@ if __name__ == '__main__':
         help='peaks.bed')
     parser.add_argument('--sequence-file', type=str, required=True, 
         help='peaks.transcript_coord.extended.fa')
-    parser.add_argument('--reactivity-file', type=str, required=True, 
+    parser.add_argument('--reactivity-file', type=str,
         help='peaks.icshape.Lu_2016_invitro')
+    parser.add_argument('--min-coverage', type=float, default=0,
+        help='minimum fraction of nucleotides required to be covered by reactivities')
     parser.add_argument('--output-file', '-o', type=str, required=True,
         help='HDF5 file containing X and y')
     
